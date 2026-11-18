@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+
+    // Parent account and everything about their children: private to the parent.
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+      match /{document=**} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    // Family-stage share links: anyone with the link can watch and send hearts.
+    match /shares/{shareId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.hearts == 0
+        && request.resource.data.nickname is string
+        && request.resource.data.nickname.size() <= 30
+        && request.resource.data.events is list
+        && request.resource.data.events.size() <= 4000;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['hearts'])
+        && request.resource.data.hearts == resource.data.hearts + 1;
+      allow delete: if isOwner(resource.data.ownerUid);
+    }
+
+    // Referral codes: public lookup; a new family registers itself as a join.
+    match /invites/{code} {
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      match /joins/{joinUid} {
+        allow create: if isOwner(joinUid);
+        allow read: if signedIn() && get(/databases/$(database)/documents/invites/$(code)).data.uid == request.auth.uid;
+      }
+    }
+  }
+}
